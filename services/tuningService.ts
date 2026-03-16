@@ -1,6 +1,6 @@
 
 
-import { FullSimulationConfig, ModelType, ModelPhysicsParams, TuningResult, AnalysisReport, SimulationSettings, NudgeType, CalibrationPoint, TuningScenario, DeepAnalysisResult, ScenarioNudgeResult, NudgePerformance, EditableNudgeParams, TuningHistoryPoint } from '../types';
+import { FullSimulationConfig, ModelType, ModelPhysicsParams, TuningResult, AnalysisReport, SimulationSettings, NudgeType, CalibrationPoint, TuningScenario, DeepAnalysisResult, ScenarioNudgeResult, NudgePerformance, EditableNudgeParams, TuningHistoryPoint, TuningIntensity } from '../types';
 import { runSimulation } from './simulationService';
 import { SCENARIO_TEMPLATES, NUDGE_PARAMS } from '../constants';
 
@@ -26,7 +26,7 @@ const calculateRSquared = (actuals: number[], predictions: number[]): number => 
     const ssRes = actuals.reduce((a, b, i) => a + Math.pow(b - predictions[i], 2), 0);
     // If ssTot is 0 (all actuals are same), R2 is undefined/0
     if (ssTot === 0) return 0;
-    return Math.max(0, 1 - (ssRes / ssTot));
+    return 1 - (ssRes / ssTot);
 };
 
 // --- RANDOM INITIALIZATION HELPERS ---
@@ -134,9 +134,7 @@ const evaluateConfig = async (
     modelType: ModelType,
     numAgents: number
 ): Promise<number> => {
-    let totalSquaredError = 0;
-    
-    for (const scenario of scenarios) {
+    const results = await Promise.all(scenarios.map(async (scenario) => {
         const testConfig: FullSimulationConfig = {
             ...scenario.config,
             modelPhysics: params
@@ -146,14 +144,17 @@ const evaluateConfig = async (
             numAgents: numAgents,
             model: modelType,
             nudge: scenario.nudgeSettings.nudge,
-            nudgeParams: scenario.nudgeSettings.nudgeParams
+            nudgeParams: scenario.nudgeSettings.nudgeParams,
+            skipComparisonModels: true,
+            skipDelay: true
         };
 
         const result = await runSimulation(testConfig, scenarioSettings);
         const error = result.turnout - scenario.config.globalContext.ground_truth_turnout;
-        totalSquaredError += error * error;
-    }
+        return error * error;
+    }));
     
+    const totalSquaredError = results.reduce((acc, val) => acc + val, 0);
     return Math.sqrt(totalSquaredError / scenarios.length); // RMSE
 };
 
@@ -401,91 +402,85 @@ const runOptimizationChain = async (
 export const runTuner = async (
     scenarios: TuningScenario[], 
     modelType: ModelType, 
-    iterations: number = 50,
+    intensity: TuningIntensity = TuningIntensity.Balanced,
     onProgress: (progress: number, currentError: number, statusText: string, liveData?: { run: number; data: TuningHistoryPoint[] }[]) => void
 ): Promise<TuningResult> => {
     
-    const STEPS = iterations;
+    // Intensity configuration
+    const configMap = {
+        [TuningIntensity.Quick]: { restarts: 1, iterations: 30 },
+        [TuningIntensity.Balanced]: { restarts: 3, iterations: 60 },
+        [TuningIntensity.Deep]: { restarts: 5, iterations: 120 }
+    };
+    
+    const { restarts: NUM_RESTARTS, iterations: STEPS } = configMap[intensity];
     const HIGH_FIDELITY_N = 2500;
     const LOW_FIDELITY_N = 800;
-    const NUM_RESTARTS = 3; // Multi-start optimization
     
     // Baseline Physics (template defaults)
     const templateParams = clone(SCENARIO_TEMPLATES.TVM.modelPhysics); 
     
     // 0. Establish Baseline Error
+    onProgress(0, 0, "Establishing high-fidelity baseline...", []);
     const initialHighFiError = await evaluateConfig(templateParams, scenarios, modelType, HIGH_FIDELITY_N);
 
     let globalBestParams = clone(templateParams);
-    let globalBestEnergy = Infinity;
+    let globalBestEnergy = initialHighFiError;
     
-    const fullHistory: TuningHistoryPoint[] = [];
+    const multiRunHistory: { run: number; data: TuningHistoryPoint[] }[] = new Array(NUM_RESTARTS).fill(0).map((_, i) => ({ run: i + 1, data: [] }));
+    const runBestEnergies = new Array(NUM_RESTARTS).fill(initialHighFiError);
     const paramHistory: { iteration: number; [key: string]: number }[] = [];
-    const multiRunHistory: { run: number; data: TuningHistoryPoint[] }[] = [];
     
-    let totalIterationsCount = 0;
-
-    // --- MULTI-START OPTIMIZATION LOOP ---
-    for (let run = 1; run <= NUM_RESTARTS; run++) {
-        const runHistory: TuningHistoryPoint[] = [];
-
-        // Run 1 starts with template params (conservative).
-        // Runs 2+ start with randomized params (exploration).
+    // --- MULTI-START OPTIMIZATION LOOP (PARALLEL) ---
+    const optimizationRuns = new Array(NUM_RESTARTS).fill(0).map(async (_, index) => {
+        const run = index + 1;
         const startParams = run === 1 ? templateParams : generateRandomParams(modelType);
         
-        onProgress(
-            ((run - 1) / NUM_RESTARTS) * 100, 
-            globalBestEnergy === Infinity ? initialHighFiError : globalBestEnergy,
-            `Optimization Run ${run}/${NUM_RESTARTS}: ${run === 1 ? 'Baseline Refinement' : 'Global Search'}`,
-            [...multiRunHistory, { run, data: [] }]
-        );
-
-        const { bestParams, bestEnergy } = await runOptimizationChain(
+        return runOptimizationChain(
             startParams, 
             scenarios, 
             modelType, 
             STEPS, 
             LOW_FIDELITY_N,
             (step, energy, currentBestParams) => {
-                totalIterationsCount++;
+                multiRunHistory[index].data.push({ iteration: step, error: energy });
+                runBestEnergies[index] = energy;
                 
-                // Log history
-                const point = { iteration: step, error: energy };
-                fullHistory.push({ iteration: totalIterationsCount, error: energy });
-                runHistory.push(point);
-                
-                // Log params (for first run only to keep chart clean, or could avg)
+                // Track parameter history for the best run or first run
                 if (run === 1 || energy < globalBestEnergy) {
-                    const snapshot: any = { iteration: totalIterationsCount };
+                    const snapshot: any = { iteration: step + (run * STEPS) }; 
                     const pSource = modelType === ModelType.Utility ? currentBestParams.utility : 
                                     modelType === ModelType.DDM ? currentBestParams.ddm : currentBestParams.dual_system;
                     Object.entries(pSource).forEach(([k, v]) => snapshot[k] = v as number);
                     paramHistory.push(snapshot);
                 }
 
-                // Construct live snapshot
-                const currentSnapshot = [
-                    ...multiRunHistory, 
-                    { run: run, data: [...runHistory] } // Copy array to be safe
-                ];
-
-                // Update Progress Bar & Live Chart
-                const runProgress = (step / STEPS) / NUM_RESTARTS;
-                const baseProgress = (run - 1) / NUM_RESTARTS;
-                onProgress((baseProgress + runProgress) * 100, energy, `Optimization Run ${run}/${NUM_RESTARTS}`, currentSnapshot);
+                // Aggregate progress
+                const totalSteps = NUM_RESTARTS * STEPS;
+                const completedSteps = multiRunHistory.reduce((acc, r) => acc + r.data.length, 0);
+                const bestOverall = Math.min(...runBestEnergies);
+                
+                onProgress(
+                    (completedSteps / totalSteps) * 100, 
+                    bestOverall,
+                    `Tuning in progress (${intensity} mode)...`,
+                    [...multiRunHistory]
+                );
             }
         );
+    });
 
-        multiRunHistory.push({ run, data: runHistory });
-
-        // Update Global Best if this run found a better solution
-        if (bestEnergy < globalBestEnergy) {
-            globalBestEnergy = bestEnergy;
-            globalBestParams = bestParams;
+    const runResults = await Promise.all(optimizationRuns);
+    
+    // Find the absolute best across all parallel runs
+    runResults.forEach(res => {
+        if (res.bestEnergy < globalBestEnergy) {
+            globalBestEnergy = res.bestEnergy;
+            globalBestParams = res.bestParams;
         }
-    }
+    });
 
-    onProgress(100, globalBestEnergy, "Finalizing Validation...", multiRunHistory);
+    onProgress(95, globalBestEnergy, "Finalizing calibration...", multiRunHistory);
 
     // 4. Final Validation (High Fidelity) on Global Best
     const calibrationData: CalibrationPoint[] = [];
@@ -528,8 +523,8 @@ export const runTuner = async (
 
     return {
         optimizedParams: globalBestParams,
-        history: fullHistory,
-        multiRunHistory, // Return the separate run histories
+        history: multiRunHistory[0].data, // Use first run as representative history
+        multiRunHistory, 
         paramHistory,
         finalError: finalValidationRMSE,
         improvement: initialHighFiError - finalValidationRMSE,
@@ -540,6 +535,7 @@ export const runTuner = async (
         analysis,
         tunerConfig: {
             modelType,
+            intensity,
             iterationsPerRun: STEPS,
             totalRuns: NUM_RESTARTS,
             populationSizeHighFidelity: HIGH_FIDELITY_N,

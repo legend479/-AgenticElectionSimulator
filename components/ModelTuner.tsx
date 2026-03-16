@@ -1,7 +1,7 @@
 
 
 import React, { useState, useMemo } from 'react';
-import { FullSimulationConfig, ModelType, TuningResult, TuningScenario, NudgeType, EditableNudgeParams, DeepAnalysisResult, TuningHistoryPoint } from '../types';
+import { FullSimulationConfig, ModelType, TuningResult, TuningScenario, NudgeType, EditableNudgeParams, DeepAnalysisResult, TuningHistoryPoint, TuningIntensity } from '../types';
 import { SCENARIO_TEMPLATES, NUDGE_PARAMS } from '../constants';
 import { runTuner, runDeepAnalysis } from '../services/tuningService';
 import Card from './ui/Card';
@@ -13,11 +13,10 @@ import { LineChart, Line, XAxis, YAxis, CartesianGrid, ResponsiveContainer, Tool
 const transformMultiRunData = (history: { run: number; data: TuningHistoryPoint[] }[]) => {
     if (!history || history.length === 0) return [];
     
-    // Assume runs are roughly same length, assume max 50 steps for x-axis scaling
-    const steps = 50; 
+    const maxSteps = Math.max(...history.map(run => run.data.length), 10); 
     const data = [];
     
-    for (let i = 0; i < steps; i++) {
+    for (let i = 0; i < maxSteps; i++) {
         const point: any = { iteration: i + 1 };
         let hasData = false;
         history.forEach(run => {
@@ -77,6 +76,8 @@ const ModelTuner: React.FC = () => {
     const [newScenarioNudge, setNewScenarioNudge] = useState<NudgeType>(NudgeType.None);
     const [newScenarioNudgeParams, setNewScenarioNudgeParams] = useState<EditableNudgeParams>(JSON.parse(JSON.stringify(NUDGE_PARAMS)));
 
+    const [tuningIntensity, setTuningIntensity] = useState<TuningIntensity>(TuningIntensity.Balanced);
+
     const handleStartTuning = async () => {
         setIsTuning(true);
         setResult(null);
@@ -86,7 +87,7 @@ const ModelTuner: React.FC = () => {
         setStatusText("Initializing...");
 
         try {
-            const tuningResult = await runTuner(tuningScenarios, selectedModel, 50, (prog, err, status, liveHistory) => {
+            const tuningResult = await runTuner(tuningScenarios, selectedModel, tuningIntensity, (prog, err, status, liveHistory) => {
                 setProgress(prog);
                 setCurrentError(err);
                 setStatusText(status);
@@ -259,7 +260,9 @@ const ModelTuner: React.FC = () => {
                 y: scenarioNames.indexOf(r.scenarioName), // categorical index
                 z: r.lift * 100, // Lift percentage
                 nudge: r.nudge,
-                scenario: r.scenarioName
+                scenario: r.scenarioName,
+                turnout: r.turnout * 100,
+                baseline: r.baseline * 100
             });
         });
         return { data, nudges, scenarioNames };
@@ -290,10 +293,11 @@ const ModelTuner: React.FC = () => {
     };
 
     const getHeatmapColor = (lift: number) => {
-        if (lift <= 0) return '#475569'; // Slate 600 (Neutral/Negative)
-        if (lift < 1.5) return '#0ea5e9'; // Sky 500 (Low)
-        if (lift < 3.5) return '#6366f1'; // Indigo 500 (Medium)
-        if (lift < 6.0) return '#a855f7'; // Purple 500 (High)
+        if (lift < -0.5) return '#f43f5e'; // Rose 500 (Negative)
+        if (lift <= 0.5) return '#475569'; // Slate 600 (Neutral)
+        if (lift < 2.0) return '#0ea5e9'; // Sky 500 (Low)
+        if (lift < 4.0) return '#6366f1'; // Indigo 500 (Medium)
+        if (lift < 7.0) return '#a855f7'; // Purple 500 (High)
         return '#ec4899'; // Pink 500 (Very High)
     };
 
@@ -370,6 +374,31 @@ const ModelTuner: React.FC = () => {
                             </div>
                         </div>
 
+                        <div className="mb-6">
+                            <h3 className="text-xs font-bold text-slate-500 uppercase tracking-wider mb-3">Tuning Intensity</h3>
+                            <div className="grid grid-cols-3 gap-2">
+                                {Object.values(TuningIntensity).map((intensity) => (
+                                    <button
+                                        key={intensity}
+                                        onClick={() => setTuningIntensity(intensity)}
+                                        disabled={isTuning}
+                                        className={`py-2 px-1 text-[10px] font-bold rounded border transition-all ${
+                                            tuningIntensity === intensity 
+                                                ? 'bg-orange-600/20 border-orange-500 text-orange-400' 
+                                                : 'bg-slate-800 border-slate-700 text-slate-500 hover:border-slate-600'
+                                        }`}
+                                    >
+                                        {intensity}
+                                    </button>
+                                ))}
+                            </div>
+                            <p className="text-[10px] text-slate-600 mt-2 italic">
+                                {tuningIntensity === TuningIntensity.Quick && "Fast search, lower accuracy (1 run, 30 steps)."}
+                                {tuningIntensity === TuningIntensity.Balanced && "Standard multi-start search (3 runs, 60 steps)."}
+                                {tuningIntensity === TuningIntensity.Deep && "Exhaustive global search (5 runs, 120 steps)."}
+                            </p>
+                        </div>
+
                         <button
                             onClick={handleStartTuning}
                             disabled={isTuning || isAnalyzing}
@@ -437,7 +466,7 @@ const ModelTuner: React.FC = () => {
                                             labelFormatter={(label) => `Step ${label}`}
                                         />
                                         <Legend iconType="plainline" wrapperStyle={{fontSize: '10px', paddingTop: '5px'}} />
-                                        {[1, 2, 3, 4].map((runNum, index) => (
+                                        {[1, 2, 3, 4, 5].map((runNum, index) => (
                                             <Line 
                                                 key={runNum} 
                                                 type="monotone" 
@@ -459,6 +488,18 @@ const ModelTuner: React.FC = () => {
                     {result && (
                         <>
                         <Card className="p-6">
+                            <h3 className="text-sm font-bold text-slate-400 uppercase tracking-wider mb-2">Error Improvement</h3>
+                            <div className="flex items-baseline gap-2">
+                                <p className={`text-3xl font-mono font-bold ${result.improvement > 0 ? 'text-emerald-400' : result.improvement < 0 ? 'text-rose-400' : 'text-slate-300'}`}>
+                                    {result.improvement > 0 ? `+${result.improvement.toFixed(4)}` : result.improvement.toFixed(4)}
+                                </p>
+                            </div>
+                            <p className="text-xs text-slate-500 mt-2">
+                                Absolute reduction in RMSE compared to high-fidelity baseline (N=2500) before tuning.
+                            </p>
+                        </Card>
+
+                        <Card className="p-6">
                              <h3 className="text-sm font-bold text-slate-400 uppercase tracking-wider mb-2">Goodness of Fit (R²)</h3>
                              <div className="flex items-baseline gap-2">
                                 <p className={`text-3xl font-mono font-bold ${result.rSquared > 0.8 ? 'text-green-400' : result.rSquared > 0.5 ? 'text-yellow-400' : 'text-red-400'}`}>
@@ -467,10 +508,10 @@ const ModelTuner: React.FC = () => {
                                 <span className="text-slate-500 text-sm">/ 1.000</span>
                              </div>
                              {result.rSquared < 0 && (
-                                 <p className="text-xs text-red-400 mt-2">Poor Fit: Model performing worse than mean baseline.</p>
+                                 <p className="text-xs text-red-400 mt-2 font-bold">Poor Fit: Model performing worse than mean baseline.</p>
                              )}
                              <p className="text-xs text-slate-500 mt-2">
-                                R² indicates the proportion of variance in the ground truth explained by the model. 1.0 is a perfect fit.
+                                R-squared indicates the proportion of variance in the ground truth explained by the model. Values closer to 1.0 indicate a better fit, while negative values indicate a poor fit.
                              </p>
                         </Card>
                         </>
@@ -638,28 +679,61 @@ const ModelTuner: React.FC = () => {
                                      <h4 className="text-xs font-bold text-slate-400 uppercase mb-2">Contextual Heatmap (Scenario x Nudge)</h4>
                                      <div className="h-56 w-full">
                                          <ResponsiveContainer>
-                                             <ScatterChart margin={{ top: 10, right: 10, bottom: 10, left: 0 }}>
+                                             <ScatterChart margin={{ top: 10, right: 30, bottom: 40, left: 60 }}>
                                                  <CartesianGrid strokeDasharray="3 3" stroke="#334155" strokeOpacity={0.2} />
-                                                 <XAxis type="number" dataKey="x" domain={[-0.5, heatmapData.nudges.length - 0.5]} tick={false} hide />
-                                                 <YAxis type="number" dataKey="y" domain={[-0.5, heatmapData.scenarioNames.length - 0.5]} tick={false} hide />
+                                                 <XAxis 
+                                                   type="number" 
+                                                   dataKey="x" 
+                                                   domain={[-0.5, heatmapData.nudges.length - 0.5]} 
+                                                   ticks={heatmapData.nudges.map((_, i) => i)}
+                                                   tickFormatter={(i) => heatmapData.nudges[i]}
+                                                   tick={{ fontSize: 9, fill: '#94a3b8' }}
+                                                   interval={0}
+                                                   angle={-45}
+                                                   textAnchor="end"
+                                                 />
+                                                 <YAxis 
+                                                   type="number" 
+                                                   dataKey="y" 
+                                                   domain={[-0.5, heatmapData.scenarioNames.length - 0.5]} 
+                                                   ticks={heatmapData.scenarioNames.map((_, i) => i)}
+                                                   tickFormatter={(i) => heatmapData.scenarioNames[i]}
+                                                   tick={{ fontSize: 9, fill: '#94a3b8' }}
+                                                   interval={0}
+                                                 />
+                                                 <ZAxis type="number" range={[400, 400]} />
                                                  <Tooltip 
                                                     cursor={{strokeDasharray: '3 3'}}
                                                     content={({ active, payload }) => {
                                                         if (active && payload && payload.length) {
                                                             const data = payload[0].payload;
                                                             return (
-                                                                <div className="bg-slate-900/90 backdrop-blur border border-slate-600 p-3 rounded shadow-xl z-50 min-w-[150px]">
-                                                                    <p className="text-xs text-slate-400 uppercase tracking-wider mb-1">Scenario</p>
-                                                                    <p className="text-slate-200 font-semibold mb-2 text-sm border-b border-slate-700 pb-1">{data.scenario}</p>
+                                                                <div className="bg-slate-900/95 backdrop-blur-md border border-slate-700 p-3 rounded-lg shadow-2xl z-50 min-w-[180px]">
+                                                                    <div className="border-b border-slate-800 pb-2 mb-2">
+                                                                       <p className="text-[10px] text-slate-500 uppercase tracking-widest font-bold">Scenario</p>
+                                                                       <p className="text-slate-100 font-bold text-sm">{data.scenario}</p>
+                                                                    </div>
                                                                     
-                                                                    <p className="text-xs text-slate-400 uppercase tracking-wider mb-1">Intervention</p>
-                                                                    <p className="text-sky-300 font-medium mb-2 text-sm">{data.nudge}</p>
+                                                                    <div className="mb-3">
+                                                                       <p className="text-[10px] text-slate-500 uppercase tracking-widest font-bold">Intervention</p>
+                                                                       <p className="text-sky-400 font-semibold text-sm">{data.nudge}</p>
+                                                                    </div>
                                                                     
-                                                                    <div className="flex justify-between items-center bg-slate-900 p-1.5 rounded">
-                                                                        <span className="text-xs text-slate-400">Impact</span>
-                                                                        <span className={`text-sm font-bold ${data.z > 0 ? 'text-emerald-400' : 'text-slate-400'}`}>
-                                                                            {data.z > 0 ? '+' : ''}{data.z.toFixed(3)}pp
-                                                                        </span>
+                                                                    <div className="space-y-1.5 bg-slate-950/50 p-2 rounded border border-slate-800/50">
+                                                                       <div className="flex justify-between items-center text-xs">
+                                                                           <span className="text-slate-500">Baseline</span>
+                                                                           <span className="text-slate-300 font-mono">{data.baseline.toFixed(1)}%</span>
+                                                                       </div>
+                                                                       <div className="flex justify-between items-center text-xs">
+                                                                           <span className="text-slate-500">With Nudge</span>
+                                                                           <span className="text-slate-100 font-mono font-bold">{data.turnout.toFixed(1)}%</span>
+                                                                       </div>
+                                                                       <div className="pt-1 mt-1 border-t border-slate-800 flex justify-between items-center">
+                                                                           <span className="text-xs font-bold text-slate-400">Net Impact</span>
+                                                                           <span className={`text-sm font-bold font-mono ${data.z > 0.5 ? 'text-emerald-400' : data.z < -0.5 ? 'text-rose-400' : 'text-slate-400'}`}>
+                                                                               {data.z > 0 ? '+' : ''}{data.z.toFixed(2)}pp
+                                                                           </span>
+                                                                       </div>
                                                                     </div>
                                                                 </div>
                                                             );
@@ -679,12 +753,13 @@ const ModelTuner: React.FC = () => {
                                              </ScatterChart>
                                          </ResponsiveContainer>
                                      </div>
-                                     <div className="flex items-center justify-center gap-4 mt-3 text-[10px] text-slate-400">
-                                        <div className="flex items-center gap-1"><div className="w-3 h-3 bg-[#475569] rounded-sm"></div><span>≤0%</span></div>
-                                        <div className="flex items-center gap-1"><div className="w-3 h-3 bg-[#0ea5e9] rounded-sm"></div><span>&lt;1.5%</span></div>
-                                        <div className="flex items-center gap-1"><div className="w-3 h-3 bg-[#6366f1] rounded-sm"></div><span>&lt;3.5%</span></div>
-                                        <div className="flex items-center gap-1"><div className="w-3 h-3 bg-[#a855f7] rounded-sm"></div><span>&lt;6%</span></div>
-                                        <div className="flex items-center gap-1"><div className="w-3 h-3 bg-[#ec4899] rounded-sm"></div><span>6%+</span></div>
+                                     <div className="flex flex-wrap items-center justify-center gap-x-4 gap-y-2 mt-4 text-[10px] text-slate-400">
+                                         <div className="flex items-center gap-1.5"><div className="w-3 h-3 bg-[#f43f5e] rounded-sm"></div><span>&lt;-0.5%</span></div>
+                                         <div className="flex items-center gap-1.5"><div className="w-3 h-3 bg-[#475569] rounded-sm"></div><span>±0.5%</span></div>
+                                         <div className="flex items-center gap-1.5"><div className="w-3 h-3 bg-[#0ea5e9] rounded-sm"></div><span>&lt;2%</span></div>
+                                         <div className="flex items-center gap-1.5"><div className="w-3 h-3 bg-[#6366f1] rounded-sm"></div><span>&lt;4%</span></div>
+                                         <div className="flex items-center gap-1.5"><div className="w-3 h-3 bg-[#a855f7] rounded-sm"></div><span>&lt;7%</span></div>
+                                         <div className="flex items-center gap-1.5"><div className="w-3 h-3 bg-[#ec4899] rounded-sm"></div><span>7%+</span></div>
                                     </div>
                                 </Card>
                                 

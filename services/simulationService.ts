@@ -262,13 +262,11 @@ const calculateProbabilityDensity = (decisions: AgentDecision[]): { prob: number
 // --- MAIN ORCHESTRATOR ---
 export const runSimulation = (config: FullSimulationConfig, settings: SimulationSettings): Promise<SimulationResult> => {
     return new Promise((resolve) => {
-        setTimeout(() => {
+        const run = () => {
             // Shallow copy config to ensure no accidental mutation of the template
             const runConfig = JSON.parse(JSON.stringify(config));
             
             const agents = generateAgents(runConfig, settings.numAgents);
-            // Make a shallow copy of agents for each model to prevent mutation bleeding
-            const agentsCopy1 = agents.map(a => ({...a}));
             
             let primaryResult: { decisions: AgentDecision[]; diagnostics?: any; };
             let baselineTurnout: number | undefined;
@@ -280,16 +278,23 @@ export const runSimulation = (config: FullSimulationConfig, settings: Simulation
                 [ModelType.DualSystem]: runDualSystem,
             };
 
-            // Run all models for comparison data with current nudge
-            for (const modelType of Object.values(ModelType)) {
-                const runner = modelRunners[modelType as ModelType] as (agents: Agent[], config: FullSimulationConfig, settings: SimulationSettings) => { decisions: AgentDecision[] };
-                // Pass fresh copy of agents
-                const result = runner(agents.map(a => ({...a})), runConfig, settings);
-                const turnout = result.decisions.filter(d => d.voted).length / result.decisions.length;
-                turnoutByModel.push({ model: modelType, turnout });
+            if (settings.skipComparisonModels) {
+                // Optimized path for tuning: only run the requested model
+                const runner = modelRunners[settings.model] as (agents: Agent[], config: FullSimulationConfig, settings: SimulationSettings) => { decisions: AgentDecision[] };
+                primaryResult = runner(agents, runConfig, settings);
+                const turnout = primaryResult.decisions.filter(d => d.voted).length / primaryResult.decisions.length;
+                turnoutByModel.push({ model: settings.model, turnout });
+            } else {
+                // Standard path: run all models for comparison
+                for (const modelType of Object.values(ModelType)) {
+                    const runner = modelRunners[modelType as ModelType] as (agents: Agent[], config: FullSimulationConfig, settings: SimulationSettings) => { decisions: AgentDecision[] };
+                    const result = runner(agents.map(a => ({...a})), runConfig, settings);
+                    const turnout = result.decisions.filter(d => d.voted).length / result.decisions.length;
+                    turnoutByModel.push({ model: modelType as ModelType, turnout });
 
-                if (modelType === settings.model) {
-                    primaryResult = result;
+                    if (modelType === settings.model) {
+                        primaryResult = result;
+                    }
                 }
             }
 
@@ -313,6 +318,12 @@ export const runSimulation = (config: FullSimulationConfig, settings: Simulation
                 baselineTurnout: baselineTurnout,
                 voteProbDistribution: voteProbDistribution,
             });
-        }, 50);
+        };
+
+        if (settings.skipDelay) {
+            run();
+        } else {
+            setTimeout(run, 50);
+        }
     });
 };

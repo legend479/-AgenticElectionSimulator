@@ -124,6 +124,8 @@ export interface SimulationSettings {
   model: ModelType;
   nudge: NudgeType;
   nudgeParams: EditableNudgeParams;
+  skipComparisonModels?: boolean;
+  skipDelay?: boolean;
 }
 
 // --- Visualization Data Types ---
@@ -184,8 +186,15 @@ export interface CalibrationPoint {
     predicted: number;
 }
 
+export enum TuningIntensity {
+    Quick = "Quick",
+    Balanced = "Balanced",
+    Deep = "Deep"
+}
+
 export interface TunerConfiguration {
     modelType: ModelType;
+    intensity: TuningIntensity;
     iterationsPerRun: number;
     totalRuns: number;
     populationSizeHighFidelity: number;

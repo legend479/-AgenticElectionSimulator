@@ -1,7 +1,7 @@
 
 import React, { useState, useMemo } from 'react';
 import { AgentDecision } from '../../types';
-import { ScatterChart, Scatter, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, ZAxis, Legend, BarChart, Bar } from 'recharts';
+import { ScatterChart, Scatter, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, ZAxis, Legend, BarChart, Bar, Label } from 'recharts';
 
 interface AgentExplorerProps {
   agents: AgentDecision[];
@@ -24,28 +24,39 @@ const AGENT_ATTRIBUTE_LABELS: Record<AgentKey, string> = {
     voteProb: 'Vote Probability',
 };
 
-const getHistogramData = (agents: AgentDecision[], key: AgentKey, bins: number = 20) => {
+const getHistogramData = (agents: AgentDecision[], key: AgentKey, bins: number = 12) => {
     if (agents.length === 0) return [];
     
-    // For boolean/binary fields like urbanicity, use 2 bins specifically
-    const isBinary = key === 'urbanicity';
-    const effectiveBins = isBinary ? 2 : bins;
-
     const values = agents.map(a => a[key] as number);
     const min = Math.min(...values);
     const max = Math.max(...values);
     const range = (max - min) < 0.000001 ? 1 : max - min;
+    
+    // Determine appropriate number of bins
+    let effectiveBins = bins;
+    if (key === 'urbanicity') {
+        effectiveBins = 2;
+    } else if (key === 'age') {
+        // Age usually spans 18-90. 12 bins means ~6 years per bin.
+        effectiveBins = Math.min(bins, Math.max(2, Math.ceil(range / 5))); 
+    } else if (range < 0.2) {
+        effectiveBins = 5;
+    }
+
     const step = range / effectiveBins;
+    
+    // Determine label precision
+    const precision = range < 0.1 ? 3 : (range < 1 ? 2 : 1);
 
     const data = Array.from({ length: effectiveBins }, (_, i) => {
         const start = min + i * step;
         const end = min + (i + 1) * step;
-        let name = `${start.toFixed(2)}`;
+        let name = `${start.toFixed(precision)}`;
         
         if (key === 'age') {
-            name = `${start.toFixed(0)}-${end.toFixed(0)}`;
-        } else if (isBinary) {
-             name = start < 0.5 ? 'Rural (0)' : 'Urban (1)';
+            name = `${Math.floor(start)}-${Math.floor(end)}`;
+        } else if (key === 'urbanicity') {
+             name = start < 0.5 ? 'Rural' : 'Urban';
         }
 
         return {
@@ -161,47 +172,69 @@ const AgentExplorer: React.FC<AgentExplorerProps> = ({ agents }) => {
                     <Select id="z-axis" value={zAxisKey} onChange={setZAxisKey} />
                 </div>
             </div>
-            <div className="w-full h-[450px] bg-slate-900/20 rounded-2xl border border-slate-800/30 p-4">
-                <ResponsiveContainer>
-                <ScatterChart margin={{ top: 20, right: 20, bottom: 20, left: 0 }}>
-                    <CartesianGrid strokeDasharray="3 3" stroke="#334155" strokeOpacity={0.1} vertical={false} />
-                    <XAxis 
-                    type="number" 
-                    dataKey="x" 
-                    name={AGENT_ATTRIBUTE_LABELS[xAxisKey]} 
-                    tick={{ fill: '#64748b', fontSize: 10, fontWeight: 600 }} 
-                    axisLine={false} tickLine={false}
-                    domain={['dataMin', 'dataMax']}
-                    tickFormatter={getTickFormatter(xAxisKey)}
-                    />
-                    <YAxis 
-                    type="number" 
-                    dataKey="y" 
-                    name={AGENT_ATTRIBUTE_LABELS[yAxisKey]} 
-                    tick={{ fill: '#64748b', fontSize: 10, fontWeight: 600 }}
-                    axisLine={false} tickLine={false}
-                    domain={['dataMin', 'dataMax']}
-                    tickFormatter={getTickFormatter(yAxisKey)}
-                    />
-                    <ZAxis dataKey="z" name={AGENT_ATTRIBUTE_LABELS[zAxisKey]} range={[20, 150]} />
-                    <Tooltip
-                        cursor={{ stroke: '#334155', strokeDasharray: '3 3' }}
-                        contentStyle={{ backgroundColor: 'rgba(15, 23, 42, 0.9)', border: '1px solid rgba(51, 65, 85, 0.5)', borderRadius: '0.75rem', backdropFilter: 'blur(8px)' }}
-                        itemStyle={{ color: '#f8fafc', fontSize: '12px' }}
-                        labelStyle={{ display: 'none' }}
-                        formatter={(value: number, name: string) => [name === 'Age' ? value.toFixed(0) : value.toFixed(2), name]}
-                    />
-                    <Legend 
-                        verticalAlign="top" 
-                        align="right" 
-                        height={36}
-                        iconType="circle"
-                        formatter={(value) => <span className="text-[10px] font-black text-slate-400 uppercase tracking-widest ml-1">{value}</span>}
-                    />
-                    <Scatter name="Voted" data={chartData.filter(d => d.voted)} fill="#0ea5e9" opacity={0.5} shape="circle" />
-                    <Scatter name="Abstained" data={chartData.filter(d => !d.voted)} fill="#f43f5e" opacity={0.5} shape="circle" />
-                </ScatterChart>
-                </ResponsiveContainer>
+            <div className="w-full h-[500px] bg-slate-900/20 rounded-2xl border border-slate-800/30 p-6 flex flex-col">
+                <div className="flex justify-between items-center mb-6 px-2">
+                    <div className="text-[10px] font-black text-slate-500 uppercase tracking-[0.2em]">
+                        Bubble Size: <span className="text-sky-400">{AGENT_ATTRIBUTE_LABELS[zAxisKey]}</span>
+                    </div>
+                </div>
+                <div className="flex-1">
+                    <ResponsiveContainer>
+                    <ScatterChart margin={{ top: 10, right: 30, bottom: 40, left: 40 }}>
+                        <CartesianGrid strokeDasharray="3 3" stroke="#334155" strokeOpacity={0.1} vertical={false} />
+                        <XAxis 
+                            type="number" 
+                            dataKey="x" 
+                            name={AGENT_ATTRIBUTE_LABELS[xAxisKey]} 
+                            tick={{ fill: '#64748b', fontSize: 10, fontWeight: 600 }} 
+                            axisLine={false} tickLine={false}
+                            domain={['dataMin', 'dataMax']}
+                            tickFormatter={getTickFormatter(xAxisKey)}
+                        >
+                            <Label 
+                                value={AGENT_ATTRIBUTE_LABELS[xAxisKey]} 
+                                offset={-25} 
+                                position="insideBottom" 
+                                style={{ textAnchor: 'middle', fill: '#94a3b8', fontSize: 9, fontWeight: 800, textTransform: 'uppercase', letterSpacing: '0.15em' }} 
+                            />
+                        </XAxis>
+                        <YAxis 
+                            type="number" 
+                            dataKey="y" 
+                            name={AGENT_ATTRIBUTE_LABELS[yAxisKey]} 
+                            tick={{ fill: '#64748b', fontSize: 10, fontWeight: 600 }}
+                            axisLine={false} tickLine={false}
+                            domain={['dataMin', 'dataMax']}
+                            tickFormatter={getTickFormatter(yAxisKey)}
+                        >
+                            <Label 
+                                value={AGENT_ATTRIBUTE_LABELS[yAxisKey]} 
+                                angle={-90} 
+                                offset={-25} 
+                                position="insideLeft" 
+                                style={{ textAnchor: 'middle', fill: '#94a3b8', fontSize: 9, fontWeight: 800, textTransform: 'uppercase', letterSpacing: '0.15em' }} 
+                            />
+                        </YAxis>
+                        <ZAxis dataKey="z" name={AGENT_ATTRIBUTE_LABELS[zAxisKey]} range={[30, 200]} />
+                        <Tooltip
+                            cursor={{ stroke: '#334155', strokeDasharray: '3 3' }}
+                            contentStyle={{ backgroundColor: 'rgba(15, 23, 42, 0.95)', border: '1px solid rgba(51, 65, 85, 0.5)', borderRadius: '0.75rem', backdropFilter: 'blur(12px)', boxShadow: '0 10px 15px -3px rgba(0, 0, 0, 0.1)' }}
+                            itemStyle={{ color: '#f8fafc', fontSize: '11px', fontWeight: 600 }}
+                            labelStyle={{ display: 'none' }}
+                            formatter={(value: number, name: string) => [name === 'Age' ? value.toFixed(0) : value.toFixed(3), name]}
+                        />
+                        <Legend 
+                            verticalAlign="top" 
+                            align="right" 
+                            height={36}
+                            iconType="circle"
+                            formatter={(value) => <span className="text-[10px] font-black text-slate-400 uppercase tracking-widest ml-1">{value}</span>}
+                        />
+                        <Scatter name="Voted" data={chartData.filter(d => d.voted)} fill="#0ea5e9" fillOpacity={0.6} stroke="#0ea5e9" strokeWidth={1} />
+                        <Scatter name="Abstained" data={chartData.filter(d => !d.voted)} fill="#f43f5e" fillOpacity={0.6} stroke="#f43f5e" strokeWidth={1} />
+                    </ScatterChart>
+                    </ResponsiveContainer>
+                </div>
             </div>
         </div>
       ) : (
@@ -213,38 +246,55 @@ const AgentExplorer: React.FC<AgentExplorerProps> = ({ agents }) => {
                     Visualizing population density for <span className="text-sky-400">{AGENT_ATTRIBUTE_LABELS[histKey]}</span> segmented by voting outcome.
                 </p>
             </div>
-            <div className="w-full h-[450px] bg-slate-900/20 rounded-2xl border border-slate-800/30 p-4">
-                <ResponsiveContainer>
-                    <BarChart data={histData} margin={{ top: 20, right: 20, left: 0, bottom: 20 }}>
-                        <CartesianGrid strokeDasharray="3 3" stroke="#334155" strokeOpacity={0.1} vertical={false} />
-                        <XAxis 
-                            dataKey="name" 
-                            tick={{ fill: '#64748b', fontSize: 10, fontWeight: 600 }} 
-                            axisLine={false} 
-                            tickLine={false}
-                        />
-                        <YAxis 
-                            tick={{ fill: '#64748b', fontSize: 10, fontWeight: 600 }} 
-                            axisLine={false} 
-                            tickLine={false}
-                        />
-                        <Tooltip 
-                            cursor={{ fill: 'rgba(255,255,255,0.03)' }}
-                            contentStyle={{ backgroundColor: 'rgba(15, 23, 42, 0.9)', border: '1px solid rgba(51, 65, 85, 0.5)', borderRadius: '0.75rem', backdropFilter: 'blur(8px)' }}
-                            labelStyle={{ color: '#94a3b8', fontSize: '10px', fontWeight: 'bold', marginBottom: '8px' }}
-                            itemStyle={{ fontSize: '12px' }}
-                        />
-                        <Legend 
-                            verticalAlign="top" 
-                            align="right" 
-                            height={36}
-                            iconType="circle"
-                            formatter={(value) => <span className="text-[10px] font-black text-slate-400 uppercase tracking-widest ml-1">{value}</span>}
-                        />
-                        <Bar dataKey="Voted" stackId="a" fill="#0ea5e9" radius={[0, 0, 0, 0]} />
-                        <Bar dataKey="Abstained" stackId="a" fill="#f43f5e" radius={[4, 4, 0, 0]} />
-                    </BarChart>
-                </ResponsiveContainer>
+            <div className="w-full h-[500px] bg-slate-900/20 rounded-2xl border border-slate-800/30 p-6 flex flex-col">
+                <div className="flex-1">
+                    <ResponsiveContainer>
+                        <BarChart data={histData} margin={{ top: 10, right: 30, left: 10, bottom: 40 }}>
+                            <CartesianGrid strokeDasharray="3 3" stroke="#334155" strokeOpacity={0.1} vertical={false} />
+                            <XAxis 
+                                dataKey="name" 
+                                tick={{ fill: '#64748b', fontSize: 10, fontWeight: 600 }} 
+                                axisLine={false} 
+                                tickLine={false}
+                            >
+                                <Label 
+                                    value={AGENT_ATTRIBUTE_LABELS[histKey]} 
+                                    offset={-25} 
+                                    position="insideBottom" 
+                                    style={{ textAnchor: 'middle', fill: '#94a3b8', fontSize: 9, fontWeight: 800, textTransform: 'uppercase', letterSpacing: '0.15em' }} 
+                                />
+                            </XAxis>
+                            <YAxis 
+                                tick={{ fill: '#64748b', fontSize: 10, fontWeight: 600 }} 
+                                axisLine={false} 
+                                tickLine={false}
+                            >
+                                <Label 
+                                    value="Agent Count" 
+                                    angle={-90} 
+                                    offset={-10} 
+                                    position="insideLeft" 
+                                    style={{ textAnchor: 'middle', fill: '#94a3b8', fontSize: 9, fontWeight: 800, textTransform: 'uppercase', letterSpacing: '0.15em' }} 
+                                />
+                            </YAxis>
+                            <Tooltip 
+                                cursor={{ fill: 'rgba(255,255,255,0.03)' }}
+                                contentStyle={{ backgroundColor: 'rgba(15, 23, 42, 0.95)', border: '1px solid rgba(51, 65, 85, 0.5)', borderRadius: '0.75rem', backdropFilter: 'blur(12px)', boxShadow: '0 10px 15px -3px rgba(0, 0, 0, 0.1)' }}
+                                labelStyle={{ color: '#94a3b8', fontSize: '10px', fontWeight: 'bold', marginBottom: '8px', textTransform: 'uppercase' }}
+                                itemStyle={{ fontSize: '12px', fontWeight: 600 }}
+                            />
+                            <Legend 
+                                verticalAlign="top" 
+                                align="right" 
+                                height={36}
+                                iconType="circle"
+                                formatter={(value) => <span className="text-[10px] font-black text-slate-400 uppercase tracking-widest ml-1">{value}</span>}
+                            />
+                            <Bar dataKey="Voted" stackId="a" fill="#0ea5e9" fillOpacity={0.8} radius={[0, 0, 0, 0]} />
+                            <Bar dataKey="Abstained" stackId="a" fill="#f43f5e" fillOpacity={0.8} radius={[4, 4, 0, 0]} />
+                        </BarChart>
+                    </ResponsiveContainer>
+                </div>
             </div>
         </div>
       )}
