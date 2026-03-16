@@ -1,0 +1,5 @@
+{
+  "name": "Agentic Election Simulator",
+  "description": "A web application to simulate voter turnout using advanced behavioral models (Utility, Drift-Diffusion, Dual-System). It allows for scenario testing based on real-world demographics and the application of experimental nudges to observe their impact on election outcomes.",
+  "requestFramePermissions": []
+}
