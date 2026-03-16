@@ -356,7 +356,8 @@ const runOptimizationChain = async (
 ): Promise<{ bestParams: ModelPhysicsParams, bestEnergy: number }> => {
     
     const INITIAL_TEMP = 1.0;
-    const COOLING_RATE = 0.90;
+    // Dynamic cooling: adjust rate so temp reaches ~0.01 at the end of iterations
+    const COOLING_RATE = Math.pow(0.01, 1 / iterations);
     
     let currentParams = clone(initialParams);
     let currentEnergy = await evaluateConfig(currentParams, scenarios, modelType, LOW_FIDELITY_N); 
@@ -365,6 +366,8 @@ const runOptimizationChain = async (
     let bestEnergy = currentEnergy;
     
     let temp = INITIAL_TEMP;
+    let stepsWithoutImprovement = 0;
+    const EARLY_STOPPING_PATIENCE = Math.max(15, Math.floor(iterations * 0.4));
 
     for (let i = 1; i <= iterations; i++) {
         const candidateParams = perturbParamsSA(currentParams, modelType, temp);
@@ -386,7 +389,17 @@ const runOptimizationChain = async (
             if (currentEnergy < bestEnergy) {
                 bestEnergy = currentEnergy;
                 bestParams = clone(currentParams);
+                stepsWithoutImprovement = 0;
+            } else {
+                stepsWithoutImprovement++;
             }
+        } else {
+            stepsWithoutImprovement++;
+        }
+        
+        // Early stopping: if no improvement for a while and temp is low
+        if (stepsWithoutImprovement >= EARLY_STOPPING_PATIENCE && temp < 0.15) {
+            break;
         }
         
         temp *= COOLING_RATE;
@@ -403,7 +416,7 @@ export const runTuner = async (
     scenarios: TuningScenario[], 
     modelType: ModelType, 
     intensity: TuningIntensity = TuningIntensity.Balanced,
-    onProgress: (progress: number, currentError: number, statusText: string, liveData?: { run: number; data: TuningHistoryPoint[] }[]) => void
+    onProgress: (progress: number, currentError: number, statusText: string, liveData?: { run: number; data: TuningHistoryPoint[] }[], currentBestParams?: ModelPhysicsParams) => void
 ): Promise<TuningResult> => {
     
     // Intensity configuration
@@ -446,6 +459,12 @@ export const runTuner = async (
                 multiRunHistory[index].data.push({ iteration: step, error: energy });
                 runBestEnergies[index] = energy;
                 
+                // Update global best if this step is better
+                if (energy < globalBestEnergy) {
+                    globalBestEnergy = energy;
+                    globalBestParams = clone(currentBestParams);
+                }
+
                 // Track parameter history for the best run or first run
                 if (run === 1 || energy < globalBestEnergy) {
                     const snapshot: any = { iteration: step + (run * STEPS) }; 
@@ -464,7 +483,8 @@ export const runTuner = async (
                     (completedSteps / totalSteps) * 100, 
                     bestOverall,
                     `Tuning in progress (${intensity} mode)...`,
-                    [...multiRunHistory]
+                    [...multiRunHistory],
+                    globalBestParams
                 );
             }
         );
@@ -472,7 +492,7 @@ export const runTuner = async (
 
     const runResults = await Promise.all(optimizationRuns);
     
-    // Find the absolute best across all parallel runs
+    // Final check for the absolute best across all parallel runs
     runResults.forEach(res => {
         if (res.bestEnergy < globalBestEnergy) {
             globalBestEnergy = res.bestEnergy;
@@ -480,7 +500,7 @@ export const runTuner = async (
         }
     });
 
-    onProgress(95, globalBestEnergy, "Finalizing calibration...", multiRunHistory);
+    onProgress(95, globalBestEnergy, "Finalizing calibration...", multiRunHistory, globalBestParams);
 
     // 4. Final Validation (High Fidelity) on Global Best
     const calibrationData: CalibrationPoint[] = [];

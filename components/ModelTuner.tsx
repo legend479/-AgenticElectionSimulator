@@ -1,7 +1,7 @@
 
 
 import React, { useState, useMemo } from 'react';
-import { FullSimulationConfig, ModelType, TuningResult, TuningScenario, NudgeType, EditableNudgeParams, DeepAnalysisResult, TuningHistoryPoint, TuningIntensity } from '../types';
+import { FullSimulationConfig, ModelType, TuningResult, TuningScenario, NudgeType, EditableNudgeParams, DeepAnalysisResult, TuningHistoryPoint, TuningIntensity, ModelPhysicsParams } from '../types';
 import { SCENARIO_TEMPLATES, NUDGE_PARAMS } from '../constants';
 import { runTuner, runDeepAnalysis } from '../services/tuningService';
 import Card from './ui/Card';
@@ -77,6 +77,7 @@ const ModelTuner: React.FC = () => {
     const [newScenarioNudgeParams, setNewScenarioNudgeParams] = useState<EditableNudgeParams>(JSON.parse(JSON.stringify(NUDGE_PARAMS)));
 
     const [tuningIntensity, setTuningIntensity] = useState<TuningIntensity>(TuningIntensity.Balanced);
+    const [liveParams, setLiveParams] = useState<ModelPhysicsParams | null>(null);
 
     const handleStartTuning = async () => {
         setIsTuning(true);
@@ -84,15 +85,19 @@ const ModelTuner: React.FC = () => {
         setDeepAnalysisResult(null); 
         setProgress(0);
         setLiveChartData([]);
+        setLiveParams(null);
         setStatusText("Initializing...");
 
         try {
-            const tuningResult = await runTuner(tuningScenarios, selectedModel, tuningIntensity, (prog, err, status, liveHistory) => {
+            const tuningResult = await runTuner(tuningScenarios, selectedModel, tuningIntensity, (prog, err, status, liveHistory, currentBest) => {
                 setProgress(prog);
                 setCurrentError(err);
                 setStatusText(status);
                 if (liveHistory) {
                     setLiveChartData(transformMultiRunData(liveHistory));
+                }
+                if (currentBest) {
+                    setLiveParams(currentBest);
                 }
             });
             setResult(tuningResult);
@@ -344,6 +349,21 @@ const ModelTuner: React.FC = () => {
                         <div className="mb-6">
                              <div className="flex justify-between items-center mb-2">
                                 <label className="block text-sm font-medium text-slate-400">Calibration Scenarios</label>
+                              <div className="flex items-center gap-2">
+                                <button
+                                    onClick={() => setTuningScenarios(Object.entries(SCENARIO_TEMPLATES).map(([key, template]) => ({
+                                        id: key,
+                                        config: template,
+                                        nudgeSettings: { 
+                                            nudge: NudgeType.None, 
+                                            nudgeParams: JSON.parse(JSON.stringify(NUDGE_PARAMS)) 
+                                        }
+                                    })))}
+                                    disabled={isTuning}
+                                    className="text-[10px] text-slate-500 hover:text-slate-300 transition"
+                                >
+                                    Reset
+                                </button>
                                 <button 
                                     onClick={() => setIsModalOpen(true)}
                                     disabled={isTuning}
@@ -351,6 +371,7 @@ const ModelTuner: React.FC = () => {
                                 >
                                     + Add
                                 </button>
+                              </div>
                              </div>
                             <div className="space-y-2 bg-slate-900/50 p-3 rounded border border-slate-800 max-h-60 overflow-y-auto">
                                 {tuningScenarios.map(s => (
@@ -482,7 +503,25 @@ const ModelTuner: React.FC = () => {
                                     </LineChart>
                                 </ResponsiveContainer>
                             </div>
-                         </Card>
+
+                            {/* LIVE PARAMETER VIEW */}
+                            {isTuning && liveParams && (
+                                <div className="mt-6 pt-6 border-t border-slate-800">
+                                    <h4 className="text-[10px] font-bold text-slate-500 uppercase tracking-widest mb-3">Live Parameter Calibration</h4>
+                                    <div className="grid grid-cols-2 gap-x-4 gap-y-2">
+                                        {Object.entries(
+                                            selectedModel === ModelType.Utility ? liveParams.utility : 
+                                            selectedModel === ModelType.DDM ? liveParams.ddm : liveParams.dual_system
+                                        ).map(([key, value]) => (
+                                            <div key={key} className="flex justify-between items-center text-[10px]">
+                                                <span className="text-slate-500 font-mono">{key}</span>
+                                                <span className="text-sky-400 font-bold font-mono">{(value as number).toFixed(3)}</span>
+                                            </div>
+                                        ))}
+                                    </div>
+                                </div>
+                            )}
+                        </Card>
                     )}
                     
                     {result && (
@@ -550,6 +589,14 @@ const ModelTuner: React.FC = () => {
                                     <div>
                                         <p className="text-sky-400 font-bold mb-1">{'>'} BEHAVIORAL INSIGHT</p>
                                         <p className="leading-relaxed pl-4 border-l-2 border-slate-800">{result.analysis.behavioralInsight}</p>
+                                    </div>
+                                    <div>
+                                        <p className="text-purple-400 font-bold mb-1">{'>'} THEORETICAL IMPLICATION</p>
+                                        <p className="leading-relaxed pl-4 border-l-2 border-slate-800">{result.analysis.theoreticalImplication}</p>
+                                    </div>
+                                    <div>
+                                        <p className="text-emerald-400 font-bold mb-1">{'>'} POLICY RECOMMENDATION</p>
+                                        <p className="leading-relaxed pl-4 border-l-2 border-slate-800">{result.analysis.policyRecommendation}</p>
                                     </div>
                                 </div>
                             </div>
