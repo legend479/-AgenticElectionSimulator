@@ -289,7 +289,9 @@ const generateDeepAnalysis = (
         mathematicalSummary: mathSum,
         behavioralInsight: behInsight,
         theoreticalImplication: theoImp,
-        policyRecommendation: policy
+        policyRecommendation: policy,
+        modelReliabilityScore: rSquared > 0.85 ? "High (Predictive)" : rSquared > 0.6 ? "Medium (Descriptive)" : "Low (Exploratory)",
+        futureProjections: rSquared > 0.7 ? "Stable for similar demographic cohorts. High confidence in directional shifts." : "Caution advised for extrapolation. Model best used for relative comparison rather than absolute projection."
     };
 };
 
@@ -335,10 +337,30 @@ const generateNudgeAnalysisReport = (nudgePerformance: NudgePerformance[], detai
         contextInsights = `${topNudge.nudge} appears to be universally dominant, outperforming alternatives in every tested scenario. This indicates a fundamental driver in the population's decision architecture that this specific nudge successfully exploits.`;
     }
 
+    let riskAssessment = "Potential for 'Reactance' if social pressure is perceived as coercive. ";
+    if (topNudge.nudge === NudgeType.Monetary) {
+        riskAssessment += "Risk of 'Crowding Out' intrinsic motivation; turnout may collapse if incentives are removed.";
+    } else if (topNudge.nudge === NudgeType.SocialNorm) {
+        riskAssessment += "May alienate low-conformity groups or create 'Backfire Effects' in polarized districts.";
+    } else {
+        riskAssessment += "Low risk of negative externalities, though effectiveness may plateau with repeated exposure.";
+    }
+
+    let demographicImpact = "High impact expected among 'Cognitive Miser' profiles and low-salience voters. ";
+    if (topNudge.nudge === NudgeType.Implementation) {
+        demographicImpact += "Particularly effective for busy, urban professionals with high intent but high logistical friction.";
+    } else if (topNudge.nudge === NudgeType.IdentityFrame) {
+        demographicImpact += "Strongest resonance with younger cohorts currently forming their civic identity.";
+    } else {
+        demographicImpact += "Broad applicability across demographic strata, with slight skew towards responsive swing-voters.";
+    }
+
     return {
         executiveSummary: execSummary,
         strategicRecommendations: strategicRecs,
-        contextualInsights: contextInsights
+        contextualInsights: contextInsights,
+        riskAssessment: riskAssessment,
+        demographicImpact: demographicImpact
     };
 };
 
@@ -367,7 +389,7 @@ const runOptimizationChain = async (
     
     let temp = INITIAL_TEMP;
     let stepsWithoutImprovement = 0;
-    const EARLY_STOPPING_PATIENCE = Math.max(15, Math.floor(iterations * 0.4));
+    const EARLY_STOPPING_PATIENCE = Math.max(30, Math.floor(iterations * 0.3));
 
     for (let i = 1; i <= iterations; i++) {
         const candidateParams = perturbParamsSA(currentParams, modelType, temp);
@@ -421,14 +443,14 @@ export const runTuner = async (
     
     // Intensity configuration
     const configMap = {
-        [TuningIntensity.Quick]: { restarts: 1, iterations: 30 },
-        [TuningIntensity.Balanced]: { restarts: 3, iterations: 60 },
-        [TuningIntensity.Deep]: { restarts: 5, iterations: 120 }
+        [TuningIntensity.Quick]: { restarts: 3, iterations: 100 },
+        [TuningIntensity.Balanced]: { restarts: 6, iterations: 250 },
+        [TuningIntensity.Deep]: { restarts: 12, iterations: 500 }
     };
     
     const { restarts: NUM_RESTARTS, iterations: STEPS } = configMap[intensity];
-    const HIGH_FIDELITY_N = 2500;
-    const LOW_FIDELITY_N = 800;
+    const HIGH_FIDELITY_N = 5000;
+    const LOW_FIDELITY_N = 1500;
     
     // Baseline Physics (template defaults)
     const templateParams = clone(SCENARIO_TEMPLATES.TVM.modelPhysics); 
@@ -528,6 +550,7 @@ export const runTuner = async (
     const finalValidationRMSE = calculateRMSE(predictions, actuals);
     const rSquared = calculateRSquared(actuals, predictions);
     const mae = calculateMAE(predictions, actuals);
+    const confidenceInterval = 1.96 * (finalValidationRMSE / Math.sqrt(scenarios.length));
     
     // Perform Sensitivity Analysis on the best model
     const paramSensitivity = await analyzeSensitivity(globalBestParams, modelType, scenarios, finalValidationRMSE);
@@ -550,6 +573,7 @@ export const runTuner = async (
         improvement: initialHighFiError - finalValidationRMSE,
         rSquared,
         mae,
+        confidenceInterval,
         calibrationData,
         paramSensitivity,
         analysis,

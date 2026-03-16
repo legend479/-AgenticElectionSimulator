@@ -129,7 +129,7 @@ const ModelTuner: React.FC = () => {
         }
     };
 
-    const handleExportReport = () => {
+    const handleExportDataset = () => {
         if (!result) return;
 
         const report = {
@@ -158,7 +158,8 @@ const ModelTuner: React.FC = () => {
                     finalRMSE: result.finalError,
                     improvement: result.improvement,
                     rSquared: result.rSquared,
-                    meanAbsoluteError: result.mae
+                    meanAbsoluteError: result.mae,
+                    confidenceInterval: result.confidenceInterval
                 },
                 optimizedPhysicsParameters: result.optimizedParams,
                 parameterSensitivity: result.paramSensitivity,
@@ -249,7 +250,7 @@ const ModelTuner: React.FC = () => {
 
     const sensitivityChartData = result ? result.paramSensitivity.slice(0, 8).reverse() : [];
     const colors = ['#0ea5e9', '#f43f5e', '#10b981', '#f59e0b', '#8b5cf6'];
-    const runColors = ['#0ea5e9', '#f43f5e', '#10b981', '#f59e0b']; 
+    const runColors = ['#0ea5e9', '#f43f5e', '#10b981', '#f59e0b', '#8b5cf6', '#ec4899', '#06b6d4', '#84cc16', '#f97316', '#6366f1']; 
 
     // Heatmap Data Preparation for Deep Analysis
     const heatmapData = useMemo(() => {
@@ -458,7 +459,7 @@ const ModelTuner: React.FC = () => {
                             </button>
                             
                             <button
-                                onClick={handleExportReport}
+                                onClick={handleExportDataset}
                                 className="w-full bg-slate-800 hover:bg-slate-700 text-slate-300 font-semibold py-3 px-4 rounded-lg transition border border-slate-700 flex items-center justify-center gap-2"
                             >
                                 <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" /></svg>
@@ -487,19 +488,22 @@ const ModelTuner: React.FC = () => {
                                             labelFormatter={(label) => `Step ${label}`}
                                         />
                                         <Legend iconType="plainline" wrapperStyle={{fontSize: '10px', paddingTop: '5px'}} />
-                                        {[1, 2, 3, 4, 5].map((runNum, index) => (
-                                            <Line 
-                                                key={runNum} 
-                                                type="monotone" 
-                                                dataKey={`run${runNum}`} 
-                                                name={`Run ${runNum}`}
-                                                stroke={runColors[index % runColors.length]} 
-                                                strokeWidth={2} 
-                                                dot={false} 
-                                                isAnimationActive={false}
-                                                opacity={0.8}
-                                            />
-                                        ))}
+                                        {Array.from({ length: multiRunChartData.length > 0 ? Object.keys(multiRunChartData[0]).length - 1 : 0 }).map((_, index) => {
+                                            const runNum = index + 1;
+                                            return (
+                                                <Line 
+                                                    key={runNum} 
+                                                    type="monotone" 
+                                                    dataKey={`run${runNum}`} 
+                                                    name={`Run ${runNum}`}
+                                                    stroke={runColors[index % runColors.length]} 
+                                                    strokeWidth={2} 
+                                                    dot={false} 
+                                                    isAnimationActive={false}
+                                                    opacity={0.8}
+                                                />
+                                            );
+                                        })}
                                     </LineChart>
                                 </ResponsiveContainer>
                             </div>
@@ -553,6 +557,19 @@ const ModelTuner: React.FC = () => {
                                 R-squared indicates the proportion of variance in the ground truth explained by the model. Values closer to 1.0 indicate a better fit, while negative values indicate a poor fit.
                              </p>
                         </Card>
+
+                        <Card className="p-6">
+                             <h3 className="text-sm font-bold text-slate-400 uppercase tracking-wider mb-2">Error Margin (95% CI)</h3>
+                             <div className="flex items-baseline gap-2">
+                                <p className="text-3xl font-mono font-bold text-sky-400">
+                                    ±{(result.confidenceInterval * 100).toFixed(2)}
+                                </p>
+                                <span className="text-slate-500 text-sm">pp</span>
+                             </div>
+                             <p className="text-xs text-slate-500 mt-2">
+                                The 95% confidence interval for turnout predictions across all calibrated scenarios. Lower values indicate higher model precision.
+                             </p>
+                        </Card>
                         </>
                     )}
                 </div>
@@ -597,6 +614,16 @@ const ModelTuner: React.FC = () => {
                                     <div>
                                         <p className="text-emerald-400 font-bold mb-1">{'>'} POLICY RECOMMENDATION</p>
                                         <p className="leading-relaxed pl-4 border-l-2 border-slate-800">{result.analysis.policyRecommendation}</p>
+                                    </div>
+                                    <div className="grid grid-cols-2 gap-4 pt-2 border-t border-slate-800/50">
+                                        <div>
+                                            <p className="text-slate-500 font-bold mb-1 text-[10px] uppercase tracking-wider">Reliability Score</p>
+                                            <p className="text-white">{result.analysis.modelReliabilityScore}</p>
+                                        </div>
+                                        <div>
+                                            <p className="text-slate-500 font-bold mb-1 text-[10px] uppercase tracking-wider">Future Projections</p>
+                                            <p className="text-white">{result.analysis.futureProjections}</p>
+                                        </div>
                                     </div>
                                 </div>
                             </div>
@@ -692,6 +719,16 @@ const ModelTuner: React.FC = () => {
                                     <div>
                                         <p className="text-pink-400 font-bold mb-1">{'>'} CONTEXTUAL INSIGHTS</p>
                                         <p className="leading-relaxed pl-4 border-l-2 border-slate-800">{deepAnalysisResult.report.contextualInsights}</p>
+                                    </div>
+                                    <div className="grid grid-cols-1 md:grid-cols-2 gap-6 pt-4 border-t border-slate-800">
+                                        <div>
+                                            <p className="text-red-400 font-bold mb-1">{'>'} RISK ASSESSMENT</p>
+                                            <p className="leading-relaxed text-slate-300">{deepAnalysisResult.report.riskAssessment}</p>
+                                        </div>
+                                        <div>
+                                            <p className="text-blue-400 font-bold mb-1">{'>'} DEMOGRAPHIC IMPACT</p>
+                                            <p className="leading-relaxed text-slate-300">{deepAnalysisResult.report.demographicImpact}</p>
+                                        </div>
                                     </div>
                                 </div>
                             </div>

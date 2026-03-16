@@ -178,6 +178,8 @@ export interface AnalysisReport {
     behavioralInsight: string;
     theoreticalImplication: string;
     policyRecommendation: string;
+    modelReliabilityScore: string;
+    futureProjections: string;
 }
 
 export interface CalibrationPoint {
@@ -209,6 +211,7 @@ export interface TuningResult {
     improvement: number;
     rSquared: number;
     mae: number;
+    confidenceInterval: number;
     calibrationData: CalibrationPoint[];
     paramSensitivity: { name: string; sensitivity: number }[];
     analysis: AnalysisReport;
@@ -250,5 +253,7 @@ export interface DeepAnalysisResult {
         executiveSummary: string;
         strategicRecommendations: string;
         contextualInsights: string;
+        riskAssessment: string;
+        demographicImpact: string;
     }
 }
